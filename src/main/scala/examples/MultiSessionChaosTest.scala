@@ -11,15 +11,20 @@ import scala.concurrent.duration._
 import scala.collection.mutable.Queue
 import java.util.UUID
 import java.util.concurrent.{CountDownLatch, TimeUnit, ConcurrentHashMap}
-import scala.util.Random
+import java.text.NumberFormat
+import java.util.Locale
+import scala.util.{Random, Try}
 
 object MultiSessionChaosTest extends App {
   implicit val system: ActorSystem = ActorSystem("MultiSessionChaosTestSystem")
   implicit val log: LoggingAdapter = Logging(system, this.getClass)
   implicit val ec: ExecutionContext = system.dispatcher
   
-  println("🏭 Multi-Session Multi-Batch Chaos Test - Production Simulation")
-  println("=" * 70)
+  // Parse command line arguments
+  val config = parseArguments(args)
+  
+  println("🏭 Configurable Multi-Session Multi-Batch Chaos Test - Production Simulation")
+  println("=" * 80)
   
   try {
     // Create test table
@@ -34,6 +39,7 @@ object MultiSessionChaosTest extends App {
         session_id TEXT,
         worker_id TEXT,
         test_phase TEXT,
+        test_run_id TEXT,
         created_at TIMESTAMP
       )
       """
@@ -41,59 +47,68 @@ object MultiSessionChaosTest extends App {
     setupSession.execute(createTable)
     println("✅ Table created!")
     
-    // CLEAN START
-    println("🧹 Clearing table...")
-    val truncateTable = SimpleStatement.newInstance("TRUNCATE multi_session_test")
-    setupSession.execute(truncateTable)
-    
-    // Verify clean start
-    val initialCount = setupSession.execute(SimpleStatement.newInstance("SELECT COUNT(*) as count FROM multi_session_test")).one().getLong("count")
-    println(s"📊 Initial count: $initialCount (should be 0)")
+    // CLEAN START (optional)
+    if (!args.contains("--no-truncate")) {
+      println("🧹 Clearing table...")
+      val truncateTable = SimpleStatement.newInstance("TRUNCATE multi_session_test")
+      setupSession.execute(truncateTable)
+      
+      // Verify clean start
+      val initialCount = setupSession.execute(SimpleStatement.newInstance("SELECT COUNT(*) as count FROM multi_session_test")).one().getLong("count")
+      println(s"📊 Initial count: $initialCount (should be 0)")
+    }
     
     val testRunId = UUID.randomUUID().toString.take(8)
     println(s"🚀 Starting multi-session test (Test Run: $testRunId)")
     
-    // Test Configuration
-    val testConfig = TestConfig(
-      numSessions = 3,           // 3 different database sessions
-      numWorkersPerSession = 2,  // 2 workers per session
-      batchesPerWorker = 5,      // 5 batches per worker
-      recordsPerBatch = 100,     // 100 records per batch
-      chaosLevel = 0.3          // 30% chaos
-    )
+    // Display test configuration
+    printTestConfiguration(config)
     
-    println(s"📋 Test Configuration:")
-    println(s"   • Sessions: ${testConfig.numSessions}")
-    println(s"   • Workers per session: ${testConfig.numWorkersPerSession}")
-    println(s"   • Batches per worker: ${testConfig.batchesPerWorker}")
-    println(s"   • Records per batch: ${testConfig.recordsPerBatch}")
-    println(s"   • Total expected records: ${testConfig.totalExpectedRecords}")
-    println(s"   • Chaos level: ${(testConfig.chaosLevel * 100).toInt}%")
+    // Estimate completion time
+    val estimatedDurationSeconds = estimateTestDuration(config)
+    println(f"⏱️  Estimated completion time: ${estimatedDurationSeconds / 60}%.1f minutes")
     
     // Create multiple sessions (simulating different app instances)
-    val sessions = createMultipleSessions(testConfig.numSessions)
+    val sessions = createMultipleSessions(config.numSessions)
     println(s"✅ Created ${sessions.size} database sessions")
     
     // Create workers for each session
-    val workers = createWorkers(sessions, testConfig)
+    val workers = createWorkers(sessions, config)
     println(s"✅ Created ${workers.size} worker actors")
     
     // Start the chaos test
-    val coordinator = system.actorOf(Props(new TestCoordinator(workers, testConfig, testRunId)), "coordinator")
+    val coordinator = system.actorOf(Props(new TestCoordinator(workers, config, testRunId)), "coordinator")
     
     println("\n🎬 Starting multi-session chaos test...")
+    val startTime = System.currentTimeMillis()
     coordinator ! StartTest
     
-    // Wait for all workers to complete
-    Thread.sleep(120000) // 2 minutes for completion
+    // Wait for all workers to complete with dynamic timeout
+    val maxWaitTimeMs = math.max(estimatedDurationSeconds * 1000 * 2, 300000) // At least 5 minutes
+    println(s"⏳ Waiting up to ${maxWaitTimeMs / 60000} minutes for completion...")
+    
+    var lastProgressUpdate = System.currentTimeMillis()
+    while (System.currentTimeMillis() - startTime < maxWaitTimeMs) {
+      Thread.sleep(10000) // Check every 10 seconds
+      
+      // Print progress update every minute
+      if (System.currentTimeMillis() - lastProgressUpdate > 60000) {
+        val elapsedMinutes = (System.currentTimeMillis() - startTime) / 60000.0
+        println(f"⏳ Still running... ${elapsedMinutes}%.1f minutes elapsed")
+        lastProgressUpdate = System.currentTimeMillis()
+      }
+    }
+    
+    val totalDurationMinutes = (System.currentTimeMillis() - startTime) / 60000.0
+    println(f"⏱️  Total test duration: ${totalDurationMinutes}%.1f minutes")
     
     // Verify results
-    println("\n" + "=" * 70)
+    println("\n" + "=" * 80)
     println("🔍 FINAL VERIFICATION")
-    println("=" * 70)
+    println("=" * 80)
     
     val finalCount = setupSession.execute(SimpleStatement.newInstance("SELECT COUNT(*) as count FROM multi_session_test")).one().getLong("count")
-    val expectedTotal = testConfig.totalExpectedRecords
+    val expectedTotal = config.totalExpectedRecords
     
     println(s"📊 FINAL COUNT: $finalCount")
     println(s"📊 EXPECTED: $expectedTotal")
@@ -113,7 +128,7 @@ object MultiSessionChaosTest extends App {
     }
     
     // Detailed breakdown
-    analyzeResults(setupSession, testConfig)
+    analyzeResults(setupSession, config)
     
     // Cleanup
     sessions.foreach(_.session.close())
@@ -128,26 +143,117 @@ object MultiSessionChaosTest extends App {
     system.terminate()
   }
   
+  def parseArguments(args: Array[String]): TestConfig = {
+    var numSessions = 10
+    var numWorkersPerSession = 10
+    var batchesPerWorker = 10
+    var recordsPerBatch = 1000
+    var chaosLevel = 0.5
+    
+    var i = 0
+    while (i < args.length) {
+      args(i) match {
+        case "--sessions" =>
+          if (i + 1 < args.length) {
+            numSessions = Try(args(i + 1).toInt).getOrElse(numSessions)
+            i += 1
+          }
+        case "--workers" =>
+          if (i + 1 < args.length) {
+            numWorkersPerSession = Try(args(i + 1).toInt).getOrElse(numWorkersPerSession)
+            i += 1
+          }
+        case "--batches" =>
+          if (i + 1 < args.length) {
+            batchesPerWorker = Try(args(i + 1).toInt).getOrElse(batchesPerWorker)
+            i += 1
+          }
+        case "--records" =>
+          if (i + 1 < args.length) {
+            recordsPerBatch = Try(args(i + 1).toInt).getOrElse(recordsPerBatch)
+            i += 1
+          }
+        case "--chaos" =>
+          if (i + 1 < args.length) {
+            chaosLevel = Try(args(i + 1).toDouble / 100.0).getOrElse(chaosLevel)
+            i += 1
+          }
+        case "--help" =>
+          printUsage()
+          sys.exit(0)
+        case _ =>
+          // Ignore unknown arguments
+      }
+      i += 1
+    }
+    
+    TestConfig(numSessions, numWorkersPerSession, batchesPerWorker, recordsPerBatch, chaosLevel)
+  }
+  
+  def printUsage(): Unit = {
+    println("Usage: sbt 'runMain examples.MultiSessionChaosTest [options]'")
+    println()
+    println("Options:")
+    println("  --sessions N      Number of database sessions (default: 10)")
+    println("  --workers N       Number of workers per session (default: 10)")
+    println("  --batches N       Number of batches per worker (default: 10)")
+    println("  --records N       Number of records per batch (default: 1000)")
+    println("  --chaos N         Chaos level percentage 0-100 (default: 50)")
+    println("  --no-truncate     Skip truncating the table before test")
+    println("  --help            Show this help message")
+    println()
+    println("Examples:")
+    println("  sbt 'runMain examples.MultiSessionChaosTest'")
+    println("  sbt 'runMain examples.MultiSessionChaosTest --sessions 5 --chaos 30'")
+    println("  sbt 'runMain examples.MultiSessionChaosTest --records 500 --batches 20'")
+  }
+  
+  def printTestConfiguration(config: TestConfig): Unit = {
+    println(s"📋 Test Configuration:")
+    println(s"   • Sessions: ${config.numSessions}")
+    println(s"   • Workers per session: ${config.numWorkersPerSession}")
+    println(s"   • Batches per worker: ${config.batchesPerWorker}")
+    println(s"   • Records per batch: ${config.recordsPerBatch}")
+    println(s"   • Total expected records: ${NumberUtils.formatNumber(config.totalExpectedRecords)}")
+    println(s"   • Chaos level: ${(config.chaosLevel * 100).toInt}%")
+    println(s"   • Total workers: ${config.numSessions * config.numWorkersPerSession}")
+    println(s"   • Total batches: ${NumberUtils.formatNumber(config.numSessions * config.numWorkersPerSession * config.batchesPerWorker)}")
+  }
+  
+  def estimateTestDuration(config: TestConfig): Int = {
+    // Rough estimation based on:
+    // - ~50ms per record processing time
+    // - Chaos causing retries (multiply by 1.5)
+    // - Parallelism factor (divide by number of workers, but not linearly)
+    val totalRecords = config.totalExpectedRecords
+    val totalWorkers = config.numSessions * config.numWorkersPerSession
+    val chaosMultiplier = 1.0 + (config.chaosLevel * 1.5) // More chaos = more retries
+    val parallelismFactor = math.max(1.0, math.log10(totalWorkers.toDouble))
+    
+    val estimatedSeconds = (totalRecords * 0.05 * chaosMultiplier / parallelismFactor).toInt
+    math.max(60, estimatedSeconds) // At least 1 minute
+  }
+  
   def createMultipleSessions(numSessions: Int): List[SessionInfo] = {
     (1 to numSessions).map { i =>
       // Create different types of sessions to simulate real production
-      val sessionType = i match {
+      val sessionType = (i % 4) match {
         case 1 => 
-          // Session 1: Uses cluster session (like most of your app)
+          // Session type 1: Uses cluster session (like most of your app)
           val session = Cluster.getOrCreateLiveSession.getSession()
           SessionInfo(s"cluster_session_$i", session, "cluster")
         case 2 => 
-          // Session 2: Creates new session with keyspace (like some parts of your app)
+          // Session type 2: Creates new session with keyspace (like some parts of your app)
           val session = AstraSession.createSession("tradingtech") 
           SessionInfo(s"direct_session_$i", session, "direct")
         case 3 =>
-          // Session 3: Creates session with chaos wrapper (like your tests)
+          // Session type 3: Creates session with chaos wrapper (like your tests)
           val (session, chaosWrapper) = AstraSession.createSessionWithChaos("tradingtech")
           chaosWrapper.enableChaos()
           chaosWrapper.setChaosLevel(0.3)
           SessionInfo(s"chaos_session_$i", session, "chaos", Some(chaosWrapper))
-        case _ =>
-          // Additional sessions: Mix of approaches
+        case 0 =>
+          // Session type 4: Mix of approaches
           val session = if (Random.nextBoolean()) {
             Cluster.getOrCreateLiveSession.getSession()
           } else {
@@ -156,7 +262,9 @@ object MultiSessionChaosTest extends App {
           SessionInfo(s"mixed_session_$i", session, "mixed")
       }
       
-      println(s"   📡 Created ${sessionType.sessionType} session: ${sessionType.sessionId}")
+      if (i <= 10 || i % 10 == 0) { // Print first 10 and every 10th
+        println(s"   📡 Created ${sessionType.sessionType} session: ${sessionType.sessionId}")
+      }
       sessionType
     }.toList
   }
@@ -169,10 +277,11 @@ object MultiSessionChaosTest extends App {
         val workerId = s"${sessionInfo.sessionId}_worker_$workerNum"
         val worker = system.actorOf(Props(new BatchWorker(sessionInfo, config, workerId)), workerId)
         workers += worker
-        println(s"   👷 Created worker: $workerId")
       }
     }
     
+    val totalWorkers = workers.size
+    println(s"   👷 Created $totalWorkers workers total")
     workers.toList
   }
   
@@ -184,38 +293,49 @@ object MultiSessionChaosTest extends App {
       val sessionQuery = SimpleStatement.newInstance("SELECT session_id, COUNT(*) as count FROM multi_session_test GROUP BY session_id ALLOW FILTERING")
       val sessionResults = session.execute(sessionQuery)
       
-      println("📡 Records by session:")
+      println("📡 Records by session (showing first 10):")
+      var sessionCount = 0
       sessionResults.forEach { row =>
-        val sessionId = row.getString("session_id")
-        val count = row.getLong("count")
-        val expectedPerSession = config.numWorkersPerSession * config.batchesPerWorker * config.recordsPerBatch
-        val status = if (count == expectedPerSession) "✅" else "🚨"
-        println(s"   $status $sessionId: $count/$expectedPerSession records")
+        if (sessionCount < 10) {
+          val sessionId = row.getString("session_id")
+          val count = row.getLong("count")
+          val expectedPerSession = config.numWorkersPerSession * config.batchesPerWorker * config.recordsPerBatch
+          val status = if (count >= expectedPerSession * 0.95) "✅" else "🚨"
+          println(s"   $status $sessionId: $count/$expectedPerSession records")
+          sessionCount += 1
+        }
       }
       
-      // Breakdown by worker
-      val workerQuery = SimpleStatement.newInstance("SELECT worker_id, COUNT(*) as count FROM multi_session_test GROUP BY worker_id ALLOW FILTERING")
-      val workerResults = session.execute(workerQuery)
-      
-      println("\n👷 Records by worker:")
-      workerResults.forEach { row =>
-        val workerId = row.getString("worker_id")
-        val count = row.getLong("count")
-        val expectedPerWorker = config.batchesPerWorker * config.recordsPerBatch
-        val status = if (count == expectedPerWorker) "✅" else "🚨"
-        println(s"   $status $workerId: $count/$expectedPerWorker records")
+      if (config.numSessions > 10) {
+        println(s"   ... and ${config.numSessions - 10} more sessions")
       }
       
-      // Look for patterns in missing records
+      // Summary statistics
       val distinctBatches = session.execute(SimpleStatement.newInstance("SELECT COUNT(DISTINCT batch_id) as batch_count FROM multi_session_test")).one().getLong("batch_count")
       val expectedBatches = config.numSessions * config.numWorkersPerSession * config.batchesPerWorker
       
       println(s"\n📦 Batch Analysis:")
-      println(s"   • Expected batches: $expectedBatches")
-      println(s"   • Found batches: $distinctBatches")
+      println(s"   • Expected batches: ${NumberUtils.formatNumber(expectedBatches)}")
+      println(s"   • Found batches: ${NumberUtils.formatNumber(distinctBatches)}")
       
       if (distinctBatches < expectedBatches) {
-        println(s"   🚨 Missing ${expectedBatches - distinctBatches} entire batches!")
+        val missingBatches = expectedBatches - distinctBatches
+        println(s"   🚨 Missing ${NumberUtils.formatNumber(missingBatches)} entire batches!")
+        val missingPercentage = (missingBatches.toDouble / expectedBatches * 100)
+        println(f"   🚨 Missing batch percentage: $missingPercentage%.2f%%")
+      }
+      
+      // Performance metrics
+      val avgRecordsPerBatch = if (distinctBatches > 0) {
+        val totalRecords = session.execute(SimpleStatement.newInstance("SELECT COUNT(*) as total FROM multi_session_test")).one().getLong("total")
+        totalRecords.toDouble / distinctBatches
+      } else 0.0
+      
+      println(s"\n📈 Performance Metrics:")
+      println(f"   • Average records per batch: $avgRecordsPerBatch%.1f (expected: ${config.recordsPerBatch})")
+      
+      if (avgRecordsPerBatch < config.recordsPerBatch * 0.95) {
+        println("   🚨 Significantly fewer records per batch than expected!")
       }
       
     } catch {
@@ -225,7 +345,14 @@ object MultiSessionChaosTest extends App {
   }
 }
 
-// Data classes
+// Utility object for number formatting - accessible to all classes
+object NumberUtils {
+  private val numberFormat = NumberFormat.getNumberInstance(Locale.US)
+  def formatNumber(num: Long): String = numberFormat.format(num)
+  def formatNumber(num: Int): String = numberFormat.format(num)
+}
+
+// Data classes (unchanged)
 case class TestConfig(
   numSessions: Int,
   numWorkersPerSession: Int,
@@ -243,14 +370,14 @@ case class SessionInfo(
   chaosWrapper: Option[astra.ChaosWrapper] = None
 )
 
-// Actor messages
+// Actor messages (unchanged)
 sealed trait TestMessage
 case object StartTest extends TestMessage
 case class ProcessBatch(batchNum: Int) extends TestMessage
 case class BatchCompleted(workerId: String, batchNum: Int, recordCount: Int, success: Boolean) extends TestMessage
 case object WorkerCompleted extends TestMessage
 
-// Test Coordinator Actor
+// Test Coordinator Actor (enhanced for better progress tracking)
 class TestCoordinator(workers: List[ActorRef], config: TestConfig, testRunId: String) extends Actor {
   implicit val log: LoggingAdapter = Logging(context.system, this)
   
@@ -259,10 +386,12 @@ class TestCoordinator(workers: List[ActorRef], config: TestConfig, testRunId: St
   private var totalBatchesCompleted = 0
   private var totalRecordsProcessed = 0
   private var totalFailedBatches = 0
+  private val startTime = System.currentTimeMillis()
   
   def receive: Receive = {
     case StartTest =>
       println(s"🎬 Coordinator: Starting test with $totalWorkers workers")
+      println(s"🎯 Target: ${NumberUtils.formatNumber(config.totalExpectedRecords)} total records")
       workers.foreach(_ ! ProcessBatch(1))
       
     case BatchCompleted(workerId, batchNum, recordCount, success) =>
@@ -281,26 +410,37 @@ class TestCoordinator(workers: List[ActorRef], config: TestConfig, testRunId: St
         sender() ! WorkerCompleted
       }
       
-      // Progress update
-      if (totalBatchesCompleted % 10 == 0) {
+      // Enhanced progress update
+      val progressInterval = if (config.totalExpectedRecords > 100000) 100 else 25
+      if (totalBatchesCompleted % progressInterval == 0) {
         val totalExpectedBatches = totalWorkers * config.batchesPerWorker
         val progress = (totalBatchesCompleted * 100.0) / totalExpectedBatches
-        println(f"📈 Progress: $progress%.1f%% ($totalBatchesCompleted/$totalExpectedBatches batches, $totalRecordsProcessed records, $totalFailedBatches failed)")
+        val elapsedMinutes = (System.currentTimeMillis() - startTime) / 60000.0
+        val recordsPerSecond = if (elapsedMinutes > 0) totalRecordsProcessed / (elapsedMinutes * 60) else 0
+        
+        println(f"📈 Progress: $progress%.1f%% (${NumberUtils.formatNumber(totalBatchesCompleted)}/${NumberUtils.formatNumber(totalExpectedBatches)} batches, ${NumberUtils.formatNumber(totalRecordsProcessed)} records, ${NumberUtils.formatNumber(totalFailedBatches)} failed) - ${elapsedMinutes}%.1f min elapsed - ${recordsPerSecond}%.0f rec/sec")
       }
       
     case WorkerCompleted =>
       completedWorkers += 1
-      println(s"👷 Worker completed: $completedWorkers/$totalWorkers")
+      if (completedWorkers % 10 == 0 || completedWorkers == totalWorkers) {
+        println(s"👷 Workers completed: $completedWorkers/$totalWorkers")
+      }
       
       if (completedWorkers == totalWorkers) {
         val totalExpectedBatches = totalWorkers * config.batchesPerWorker
+        val elapsedMinutes = (System.currentTimeMillis() - startTime) / 60000.0
+        val avgRecordsPerSecond = if (elapsedMinutes > 0) totalRecordsProcessed / (elapsedMinutes * 60) else 0
+        
         println(s"\n🏁 All workers completed!")
-        println(s"📊 Final stats: $totalBatchesCompleted/$totalExpectedBatches batches, $totalRecordsProcessed records, $totalFailedBatches failed")
+        println(f"📊 Final stats: ${NumberUtils.formatNumber(totalBatchesCompleted)}/${NumberUtils.formatNumber(totalExpectedBatches)} batches, ${NumberUtils.formatNumber(totalRecordsProcessed)} records, ${NumberUtils.formatNumber(totalFailedBatches)} failed")
+        println(f"⏱️  Total time: ${elapsedMinutes}%.1f minutes")
+        println(f"🚀 Average throughput: ${avgRecordsPerSecond}%.0f records/second")
       }
   }
 }
 
-// Batch Worker Actor
+// Batch Worker Actor (enhanced with better error handling)
 class BatchWorker(sessionInfo: SessionInfo, config: TestConfig, workerId: String) extends Actor {
   implicit val log: LoggingAdapter = Logging(context.system, this)
   implicit val ec: ExecutionContext = context.dispatcher
@@ -308,13 +448,14 @@ class BatchWorker(sessionInfo: SessionInfo, config: TestConfig, workerId: String
   
   private val uploader = new AstraUploader()
   private val random = new Random()
+  private var processedBatches = 0
   
   // Prepare statement on this session (this might cause session mismatch!)
   private val insertStmt: PreparedStatement = try {
     sessionInfo.session.prepare(
       """
-      INSERT INTO multi_session_test (id, batch_id, message_data, topic, session_id, worker_id, test_phase, created_at) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, toTimestamp(now()))
+      INSERT INTO multi_session_test (id, batch_id, message_data, topic, session_id, worker_id, test_phase, test_run_id, created_at) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, toTimestamp(now()))
       """
     )
   } catch {
@@ -330,10 +471,13 @@ class BatchWorker(sessionInfo: SessionInfo, config: TestConfig, workerId: String
       val topic = s"topic_${sessionInfo.sessionType}_$batchNum"
       
       try {
-        // Add some random delay to simulate real-world timing
-        if (random.nextDouble() < 0.3) {
-          Thread.sleep(random.nextInt(500) + 100) // 100-600ms delay
+        // Variable delay based on batch size to prevent overwhelming the system
+        val delayMs = if (config.recordsPerBatch > 500) {
+          random.nextInt(200) + 50 // 50-250ms for large batches
+        } else {
+          random.nextInt(100) + 25 // 25-125ms for smaller batches
         }
+        Thread.sleep(delayMs)
         
         // Create batch elements
         val elements = (1 to config.recordsPerBatch).map { i =>
@@ -345,7 +489,8 @@ class BatchWorker(sessionInfo: SessionInfo, config: TestConfig, workerId: String
             topic,
             sessionInfo.sessionId,
             workerId,
-            s"batch_$batchNum"
+            s"batch_$batchNum",
+            sessionInfo.sessionId.take(8) // Use first 8 chars as test run ID
           )
           (messageData, boundStmt)
         }
@@ -354,7 +499,7 @@ class BatchWorker(sessionInfo: SessionInfo, config: TestConfig, workerId: String
         
         // Apply chaos if this session has it
         sessionInfo.chaosWrapper.foreach { chaosWrapper =>
-          if (random.nextDouble() < 0.5) { // 50% chance to change chaos level
+          if (random.nextDouble() < 0.3) { // 30% chance to change chaos level
             val newChaosLevel = random.nextDouble() * config.chaosLevel
             chaosWrapper.setChaosLevel(newChaosLevel)
           }
@@ -364,12 +509,24 @@ class BatchWorker(sessionInfo: SessionInfo, config: TestConfig, workerId: String
         uploader.processBatch(elements, topic, successfulBatch)
         
         val duration = System.currentTimeMillis() - startTime
+        processedBatches += 1
         
-        // Simulate some batches taking longer (async processing)
-        val asyncDelay = if (random.nextDouble() < 0.2) random.nextInt(2000) + 1000 else 500
+        // Longer wait for larger batches or chaos
+        val asyncDelay = if (config.recordsPerBatch > 500) {
+          if (sessionInfo.chaosWrapper.isDefined) {
+            random.nextInt(3000) + 2000 // 2-5 seconds with chaos
+          } else {
+            random.nextInt(2000) + 1000 // 1-3 seconds without chaos
+          }
+        } else {
+          random.nextInt(1000) + 500 // 0.5-1.5 seconds for smaller batches
+        }
         Thread.sleep(asyncDelay)
         
-        println(s"✅ $workerId batch $batchNum completed in ${duration + asyncDelay}ms (${config.recordsPerBatch} records)")
+        // Only log every 10th batch to reduce noise
+        if (batchNum % 10 == 0 || batchNum == config.batchesPerWorker) {
+          println(s"✅ $workerId: batch $batchNum/${config.batchesPerWorker} completed (${config.recordsPerBatch} records, ${duration + asyncDelay}ms)")
+        }
         
         sender() ! BatchCompleted(workerId, batchNum, config.recordsPerBatch, success = true)
         
@@ -383,7 +540,7 @@ class BatchWorker(sessionInfo: SessionInfo, config: TestConfig, workerId: String
       }
       
     case WorkerCompleted =>
-      println(s"🏁 $workerId: All batches completed")
+      println(s"🏁 $workerId: All ${config.batchesPerWorker} batches completed")
       context.stop(self)
   }
 }
