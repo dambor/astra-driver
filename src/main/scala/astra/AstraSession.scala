@@ -1,16 +1,11 @@
 package astra
 
 import java.nio.file.Paths
-
 import com.datastax.oss.driver.api.core.CqlSession
 
 object AstraSession extends SessionConfig {
   
-  /**
-   * Creates an Astra DB session with token authentication (modern method)
-   * @param keyspace The keyspace to connect to
-   * @return CqlSession instance
-   */
+  // Your existing methods (keep these unchanged)
   def createSession(keyspace: String): CqlSession = {
     CqlSession.builder()
       .withConfigLoader(loader)
@@ -20,15 +15,35 @@ object AstraSession extends SessionConfig {
       .build()
   }
   
-  /**
-   * Creates an Astra DB session without specifying a keyspace
-   * @return CqlSession instance
-   */
   def createSession(): CqlSession = {
     CqlSession.builder()
       .withConfigLoader(loader)
       .withCloudSecureConnectBundle(Paths.get(Config.secureConnectionBundlePath))
       .withAuthCredentials("token", Config.getApplicationToken())
       .build()
+  }
+  
+  // ADD these new methods to your existing object:
+  def createSessionWithChaos(keyspace: String): (CqlSession, ChaosWrapper) = {
+    val realSession = CqlSession.builder()
+      .withConfigLoader(loader)
+      .withCloudSecureConnectBundle(Paths.get(Config.secureConnectionBundlePath))
+      .withAuthCredentials("token", Config.getApplicationToken())
+      .withKeyspace(keyspace)
+      .build()
+    
+    val chaosWrapper = new ChaosWrapper(realSession)
+    (realSession, chaosWrapper)
+  }
+  
+  def createSessionWithChaos(): (CqlSession, ChaosWrapper) = {
+    val realSession = CqlSession.builder()
+      .withConfigLoader(loader)
+      .withCloudSecureConnectBundle(Paths.get(Config.secureConnectionBundlePath))
+      .withAuthCredentials("token", Config.getApplicationToken())
+      .build()
+    
+    val chaosWrapper = new ChaosWrapper(realSession)
+    (realSession, chaosWrapper)
   }
 }

@@ -291,7 +291,11 @@ object InsertSimulator extends App {
   
   try {
     println(s"🔍 Connecting to keyspace: $targetKeyspace")
-    val session = AstraSession.createSession(targetKeyspace)
+    // val session = AstraSession.createSession(targetKeyspace)
+    val (session, chaosWrapper) = AstraSession.createSessionWithChaos(targetKeyspace)
+    chaosWrapper.enableChaos()
+    chaosWrapper.setChaosLevel(0.3)  // 30% chaos
+    println(s"🐒 Chaos enabled at 30% for InsertSimulator")
     
     println(s"✅ Connected to keyspace: $targetKeyspace")
     simulateInserts(session, targetKeyspace)

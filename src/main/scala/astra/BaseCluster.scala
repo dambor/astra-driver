@@ -29,7 +29,8 @@ object LiveSession extends BaseCluster {
     session.getOrElse {
       lock.synchronized {
         session.getOrElse {
-          val newSession = AstraSession.createSession()
+          //val newSession = AstraSession.createSession()
+          val newSession = AstraSession.createSession("tradingtech")  // With keyspace
           session = Some(newSession)
           newSession
         }

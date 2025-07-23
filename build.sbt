@@ -7,7 +7,7 @@ lazy val root = (project in file("."))
     name := "AstraDriverProject",
     libraryDependencies ++= Seq(
       // Cassandra DataStax Driver
-      "com.datastax.oss" % "java-driver-core" % "4.17.0",
+      "com.datastax.oss" % "java-driver-core" % "4.13.0",
       "com.datastax.oss" % "java-driver-query-builder" % "4.17.0",
       
       // Akka for actor system and logging
