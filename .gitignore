@@ -1,0 +1,145 @@
+# Scala & SBT
+*.class
+*.log
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# SBT specific files
+dist/*
+target/
+lib_managed/
+src_managed/
+project/boot/
+project/plugins/project/
+.history
+.cache
+.lib/
+
+# IDE files
+.idea/
+.idea_modules/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.metals/
+.bloop/
+
+# Eclipse
+.metadata
+.project
+.classpath
+.settings/
+bin/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+*.out
+
+# Database & Astra specific
+secure-connect-*.zip
+*.crt
+*.key
+*.pem
+token.json
+credentials.json
+
+# Configuration files (may contain secrets)
+application.conf
+application-*.conf
+*.properties
+*.env
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Maven (if using Maven instead of SBT)
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Gradle (if using Gradle)
+.gradle/
+build/
+gradle-app.setting
+!gradle-wrapper.jar
+!gradle-wrapper.properties
+
+# Test reports
+test-output/
+test-results/
+**/target/test-reports/
+
+# Coverage reports
+coverage/
+.nyc_output/
+*.lcov
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Local development
+local/
+dev/
+scratch/
+notes.txt
+TODO.md
+
+# Generated documentation
+docs/_build/
+site/
+
+# Compiled native code
+*.so
+*.dylib
+*.dll
+
+# Package Files
+*.deb
+*.rpm
+
+# Node.js (if using any JS tooling)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
