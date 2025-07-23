@@ -1,0 +1,4 @@
+ASTRA_DB_ID=your_database_id_here
+ASTRA_DB_REGION=your_region_here
+ASTRA_DB_KEYSPACE=tradingtech
+ASTRA_DB_APPLICATION_TOKEN=your_token_here
