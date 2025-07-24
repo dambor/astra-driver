@@ -15,6 +15,10 @@ lazy val root = (project in file("."))
       "com.typesafe.akka" %% "akka-stream" % "2.6.20",
       "com.typesafe.akka" %% "akka-testkit" % "2.6.20" % Test,
       
+      // SLF4J logging (fixes the ClassNotFoundException)
+      "com.typesafe.akka" %% "akka-slf4j" % "2.6.20",
+      "ch.qos.logback" % "logback-classic" % "1.2.12",
+      
       // Scala Java8 compatibility for Future conversions
       "org.scala-lang.modules" %% "scala-java8-compat" % "1.0.2",
       
