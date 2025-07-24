@@ -1,171 +1,210 @@
-# Astra Driver Project
+# AstraDB Driver with Chaos Engineering Tests
 
-A Scala project for connecting to DataStax Astra DB (Cassandra-as-a-Service) with comprehensive configuration, retry logic, and batch processing capabilities.
+This repository contains the AstraDB driver implementation along with comprehensive chaos engineering test scenarios designed to simulate and investigate missing records issues in production environments.
+
+## Overview
+
+This project provides:
+- **Production-ready AstraDB driver** with optimized configuration and retry logic
+- **Chaos engineering framework** for testing driver reliability under adverse conditions
+- **Missing records simulation** to reproduce and analyze silent data loss scenarios
+- **Queue overflow testing** to validate driver behavior under high load
+- **Comprehensive test suite** for validating dual-write architectures
+
 
 ## Features
 
-- **Astra DB Integration**: Full configuration for DataStax Astra with secure cloud connectivity
-- **Connection Management**: Singleton session management with automatic retry
-- **Async Query Execution**: Non-blocking query execution with Future-based results  
-- **Batch Processing**: Queue-based batch processing with retry logic
-- **Comprehensive Monitoring**: Built-in metrics and request logging
-- **Actor System Integration**: Akka-based logging and scheduling
+### 🚀 **Production-Ready AstraDB Driver**
+- **Optimized connection pooling** with configurable pool sizes and timeouts
+- **Advanced request throttling** to prevent queue overflow
+- **Comprehensive retry logic** with exponential backoff
+- **Session management** with automatic recovery and connection pooling
+- **Metrics and monitoring** integration for production observability
+- **Dual-write support** for hybrid cloud/on-premises architectures
 
-## Project Structure
+### 🐒 **Chaos Engineering Framework**
+- **ChaosWrapper** for injecting failures, latency, and errors during testing
+- **Configurable chaos modes** (failure injection, latency simulation, timeout testing)
+- **Statistical tracking** of chaos injection rates and system behavior
+- **Production-like load simulation** with concurrent writers and realistic batch sizes
+- **Queue overflow simulation** to test driver behavior under extreme load
 
-```
-src/
-├── main/
-│   ├── scala/
-│   │   ├── astra/
-│   │   │   ├── SessionConfig.scala      # Driver configuration
-│   │   │   ├── Config.scala             # Application configuration
-│   │   │   ├── AstraSession.scala       # Session factory
-│   │   │   ├── QueryExecutor.scala      # Async query execution
-│   │   │   ├── BaseCluster.scala        # Session management
-│   │   │   └── AstraUploader.scala      # Batch processing with retry
-│   │   └── Main.scala                   # Application entry point
-│   └── resources/
-│       └── application.conf             # Configuration file
-└── test/
-    └── scala/
-        └── QueryExecutorSpec.scala      # Unit tests
-```
+### 🔍 **Missing Records Investigation**
+- **Silent data loss detection** scenarios that reproduce production issues
+- **Queue overflow testing** to identify when records are silently dropped
+- **Application logging vs database reality** comparison testing
+- **Dual-write validation** to ensure consistency between multiple destinations
+- **Volume tracking** to detect discrepancies between expected and actual record counts
 
-## Configuration
+## Quick Start
 
-### Environment Variables
-Set these environment variables for authentication:
-```bash
-export ASTRA_CLIENT_ID="your-client-id"
-export ASTRA_CLIENT_SECRET="your-client-secret"
-```
+### Prerequisites
+- Scala 2.13+
+- SBT 1.11+
+- AstraDB database with application token
+- Java 11+
 
-### Application Configuration
-Update `src/main/resources/application.conf`:
-```hocon
-astra {
-  connection {
-    secure-bundle-path = "path/to/your/secure-connect-database.zip"
-  }
-  driver {
-    local-datacenter = "your-datacenter"  # e.g. "us-east-1"
-  }
-}
-```
+### Setup
 
-## Usage
+1. **Clone the repository**:
+   ```bash
+   git clone <repository-url>
+   cd astra-driver
+   ```
 
-### Running the Application
-```bash
-sbt run
-```
+2. **Configure your AstraDB connection**:
+   ```bash
+   # Set your application token
+   export ASTRA_DB_APPLICATION_TOKEN=your_token_here
+   
+   # Update application.conf with your settings
+   cp Config.template .env
+   # Edit .env with your actual values
+   ```
+
+3. **Update configuration**:
+   ```hocon
+   # src/main/resources/application.conf
+   astra {
+     connection {
+       secure-bundle-path = "secure-connect-your-db.zip"
+     }
+     driver {
+       local-datacenter = "us-east-1"
+       max-queue-size = 25000
+       max-requests-per-connection = 2048
+     }
+   }
+   ```
 
 ### Running Tests
+
+#### Basic Driver Test
 ```bash
-sbt test
+sbt "runMain examples.SimpleDemoApp"
 ```
 
-### Creating a Session
-```scala
-import astra.AstraSession
-
-// With keyspace
-val session = AstraSession.createSession("your_keyspace")
-
-// Without keyspace
-val session = AstraSession.createSession()
+#### Missing Records Simulation
+```bash
+# Run the comprehensive missing records test
+sbt -J-Xmx2g "runMain examples.QueueOverflowMissingRecordsTest"
 ```
 
-### Executing Queries
-```scala
-import astra.QueryExecutor
-import scala.collection.mutable.Queue
+#### Chaos Engineering Tests
+```bash
+# Basic chaos test
+sbt "runMain examples.ChaosTest"
 
-// Prepare your statements
-val statements = Queue((boundStatement, session))
+# Latency injection test
+sbt "runMain examples.LatencyChaosTest"
 
-// Execute asynchronously
-val futureResults = QueryExecutor.execute(statements)(cluster)
+# Comprehensive test suite
+sbt "runMain examples.ComprehensiveTestSuite"
+```
 
-futureResults.onComplete {
-  case Success(results) => println(s"Executed ${results.size} statements")
-  case Failure(exception) => println(s"Failed: ${exception.getMessage}")
+#### Silent Data Loss Simulation
+```bash
+# Test partial silent data loss scenarios
+sbt "runMain examples.PartialSilentDataLossTest"
+
+# Test missing records with different session types
+sbt "runMain examples.MissingRecordsSimulationTest"
+```
+
+## Key Test Scenarios
+
+### 1. Queue Overflow Missing Records Test
+**Purpose**: Simulate production scenarios where high-frequency writes overwhelm the driver's request queue, causing silent record drops.
+
+**What it tests**:
+- Driver behavior when `max-queue-size` is exceeded
+- Silent data loss without error indication
+- Application logging vs actual database state discrepancies
+- Queue utilization monitoring and overflow detection
+
+**Expected outcome**: Reproduces the exact production issue where applications log "100% success" but records are missing from the database.
+
+### 2. Dual-Write Validation Tests
+**Purpose**: Test consistency between multiple database destinations (e.g., AstraDB + local Cassandra).
+
+**What it tests**:
+- Concurrent writes to multiple destinations
+- Failure isolation (one destination fails, other succeeds)
+- Volume reconciliation between destinations
+- Silent failures in one destination while other succeeds
+
+### 3. Chaos Engineering Tests
+**Purpose**: Validate driver resilience under adverse conditions.
+
+**What it tests**:
+- Network latency injection
+- Connection failure simulation
+- Timeout and retry behavior
+- Error recovery mechanisms
+- System behavior under degraded conditions
+
+## Configuration Options
+
+### Driver Configuration
+```hocon
+astra {
+  driver {
+    # Queue management
+    max-queue-size = 25000                    # Prevent overflow (default: 10000)
+    max-requests-per-connection = 2048        # Connection capacity
+    max-local-connections-per-host = 12       # Pool size
+    
+    # Timeouts
+    request-timeout-ms = 15000                # Request timeout
+    
+    # Throttling
+    throttler {
+      max-concurrent-requests = 15000         # Concurrent request limit
+    }
+  }
 }
 ```
 
-### Batch Processing with Retry
+### Chaos Testing Configuration
 ```scala
-import astra.AstraUploader
+// Enable chaos mode for testing
+chaosWrapper.enableChaos()
+chaosWrapper.setChaosLevel(0.3)              // 30% failure rate
+chaosWrapper.setChaosMode(Failure)           // Failure injection mode
 
-val uploader = new AstraUploader()
-uploader.processBatch(elements, topic, statements)
+// Or latency injection
+chaosWrapper.setChaosMode(Latency, Some(100.milliseconds))
 ```
 
-## Key Features Explained
 
-### Driver Configuration
-- **Connection Pooling**: Optimized connection pool settings
-- **Load Balancing**: DataStax default load balancing policy
-- **Metrics**: Comprehensive metrics collection for monitoring
-- **Request Logging**: Detailed logging for slow, error, and warning conditions
-- **Timeouts**: Configurable request timeouts
+## Troubleshooting
 
-### Session Management
-- **Singleton Pattern**: Single session instance with thread-safe creation
-- **Auto-Recovery**: Automatic session reset on connection issues
-- **Resource Management**: Proper cleanup and connection closing
+### Common Issues
 
-### Query Execution
-- **Async Processing**: Non-blocking query execution using CompletionStage to Future conversion
-- **Error Handling**: Comprehensive exception handling with logging
-- **Batch Support**: Queue-based batch processing for high throughput
-
-### Retry Logic
-- **Exponential Backoff**: Built-in retry mechanism with scheduling
-- **Failure Detection**: Automatic detection of failed commits
-- **Monitoring**: Detailed logging of retry attempts and success/failure states
-
-## Dependencies
-
-- **DataStax Java Driver**: Core Cassandra connectivity
-- **Akka**: Actor system for logging and scheduling  
-- **Scala Java8 Compat**: Future/CompletionStage conversion
-- **Typesafe Config**: Configuration management
-- **ScalaTest**: Testing framework
-- **Mockito**: Mocking for unit tests
-
-## Getting Started
-
-1. **Clone and build**:
-   ```bash
-   sbt compile
-   ```
-
-2. **Download your Astra secure bundle** from the Astra console
-
-3. **Set environment variables** for authentication
-
-4. **Update configuration** with your datacenter and bundle path
-
-5. **Run the application**:
-   ```bash
-   sbt run
-   ```
-
-## Optional: Compression
-
-To enable Snappy compression, uncomment the line in `SessionConfig.scala` and add the dependency:
-
-```scala
-libraryDependencies += "org.xerial.snappy" % "snappy-java" % "1.1.9.1"
+#### OutOfMemoryError During Tests
+```bash
+# Increase heap size for large tests
+sbt -J-Xmx2g "runMain examples.QueueOverflowMissingRecordsTest"
 ```
 
-## Monitoring
+#### Connection Issues
+```bash
+# Verify environment variables
+echo $ASTRA_DB_APPLICATION_TOKEN
 
-The driver includes comprehensive metrics for:
-- **Session metrics**: CQL requests, client timeouts
-- **Node metrics**: Connection pools, in-flight requests, timeouts, retries
-- **Request logging**: Success, slow, and error request logging
+# Check secure bundle path in application.conf
+```
 
-Monitor these through your application logs and metrics collection system.
+#### Test Timeouts
+```bash
+# Some tests may take time due to retry logic
+# Monitor logs for progress indicators
+```
+
+### Test Configuration
+```scala
+// Reduce test scale for faster execution
+val RECORDS_PER_BATCH = 100      // Reduce from 500
+val TOTAL_BATCHES = 5            // Reduce from 10
+```
+
